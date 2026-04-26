@@ -1,1 +1,155 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <mpi.h>
+#include <time.h>
 
+#define N 50000
+
+void merge(int* arr, int* temp, int left, int mid, int right) {
+    int i = left, j = mid, k = left;
+    while (i < mid && j < right) {
+        if (arr[i] <= arr[j]) temp[k++] = arr[i++];
+        else temp[k++] = arr[j++];
+    }
+    while (i < mid) temp[k++] = arr[i++];
+    while (j < right) temp[k++] = arr[j++];
+    for (i = left; i < right; i++) arr[i] = temp[i];
+}
+
+void merge_sort(int* arr, int* temp, int left, int right) {
+    if (right - left <= 1) return;
+    int mid = left + (right - left) / 2;
+    merge_sort(arr, temp, left, mid);
+    merge_sort(arr, temp, mid, right);
+    merge(arr, temp, left, mid, right);
+}
+
+void local_sort(int* arr, int n) {
+    int* temp = (int*)malloc(n * sizeof(int));
+    merge_sort(arr, temp, 0, n);
+    free(temp);
+}
+
+int main(int argc, char** argv) {
+    int rank, size;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    
+    int local_n = N / size;
+    int* local_arr = (int*)malloc(local_n * sizeof(int));
+    int* recv_buf = (int*)malloc(local_n * sizeof(int));
+    
+    if (rank == 0) {
+        int* arr = (int*)malloc(N * sizeof(int));
+        srand(time(NULL));
+        for (int i = 0; i < N; i++) {
+            arr[i] = rand() % 100000;
+        }
+        
+        // Распределение данных
+        for (int i = 1; i < size; i++) {
+            MPI_Send(arr + i * local_n, local_n, MPI_INT, i, 0, MPI_COMM_WORLD);
+        }
+        for (int i = 0; i < local_n; i++) {
+            local_arr[i] = arr[i];
+        }
+        free(arr);
+    } else {
+        MPI_Recv(local_arr, local_n, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    }
+    
+    double start_time = MPI_Wtime();
+    
+    // Локальная сортировка
+    local_sort(local_arr, local_n);
+    
+    // Чет-нечетная перестановка
+    for (int phase = 0; phase < size; phase++) {
+        if (phase % 2 == 0) {
+            // Чётная фаза: обмен с правым соседом
+            if (rank % 2 == 0 && rank < size - 1) {
+                MPI_Sendrecv(local_arr, local_n, MPI_INT, rank + 1, 0,
+                            recv_buf, local_n, MPI_INT, rank + 1, 0,
+                            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                
+                // Слияние двух массивов
+                int* merged = (int*)malloc(2 * local_n * sizeof(int));
+                int i = 0, j = 0, k = 0;
+                while (i < local_n && j < local_n) {
+                    if (local_arr[i] <= recv_buf[j]) merged[k++] = local_arr[i++];
+                    else merged[k++] = recv_buf[j++];
+                }
+                while (i < local_n) merged[k++] = local_arr[i++];
+                while (j < local_n) merged[k++] = recv_buf[j++];
+                
+                for (int i = 0; i < local_n; i++) local_arr[i] = merged[i];
+                free(merged);
+            } else if (rank % 2 == 1 && rank < size) {
+                MPI_Sendrecv(local_arr, local_n, MPI_INT, rank - 1, 0,
+                            recv_buf, local_n, MPI_INT, rank - 1, 0,
+                            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                
+                int* merged = (int*)malloc(2 * local_n * sizeof(int));
+                int i = 0, j = 0, k = 0;
+                while (i < local_n && j < local_n) {
+                    if (recv_buf[j] <= local_arr[i]) merged[k++] = recv_buf[j++];
+                    else merged[k++] = local_arr[i++];
+                }
+                while (i < local_n) merged[k++] = local_arr[i++];
+                while (j < local_n) merged[k++] = recv_buf[j++];
+                
+                for (int i = 0; i < local_n; i++) local_arr[i] = merged[i + local_n];
+                free(merged);
+            }
+        } else {
+            // Нечётная фаза: обмен с левым соседом (аналогично)
+            if (rank % 2 == 1 && rank < size - 1) {
+                MPI_Sendrecv(local_arr, local_n, MPI_INT, rank + 1, 0,
+                            recv_buf, local_n, MPI_INT, rank + 1, 0,
+                            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                
+                int* merged = (int*)malloc(2 * local_n * sizeof(int));
+                int i = 0, j = 0, k = 0;
+                while (i < local_n && j < local_n) {
+                    if (local_arr[i] <= recv_buf[j]) merged[k++] = local_arr[i++];
+                    else merged[k++] = recv_buf[j++];
+                }
+                while (i < local_n) merged[k++] = local_arr[i++];
+                while (j < local_n) merged[k++] = recv_buf[j++];
+                
+                for (int i = 0; i < local_n; i++) local_arr[i] = merged[i];
+                free(merged);
+            } else if (rank % 2 == 0 && rank > 0) {
+                MPI_Sendrecv(local_arr, local_n, MPI_INT, rank - 1, 0,
+                            recv_buf, local_n, MPI_INT, rank - 1, 0,
+                            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                
+                int* merged = (int*)malloc(2 * local_n * sizeof(int));
+                int i = 0, j = 0, k = 0;
+                while (i < local_n && j < local_n) {
+                    if (recv_buf[j] <= local_arr[i]) merged[k++] = recv_buf[j++];
+                    else merged[k++] = local_arr[i++];
+                }
+                while (i < local_n) merged[k++] = local_arr[i++];
+                while (j < local_n) merged[k++] = recv_buf[j++];
+                
+                for (int i = 0; i < local_n; i++) local_arr[i] = merged[i + local_n];
+                free(merged);
+            }
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+    }
+    
+    double end_time = MPI_Wtime();
+    
+    if (rank == 0) {
+        printf("Processes = %d\n", size);
+        printf("MPI parallel odd-even sort time = %f seconds\n", end_time - start_time);
+    }
+    
+    free(local_arr);
+    free(recv_buf);
+    MPI_Finalize();
+    return 0;
+}
