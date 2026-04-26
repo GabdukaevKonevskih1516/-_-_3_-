@@ -1,1 +1,91 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <mpi.h>
+#include <time.h>
 
+#define M 500  
+
+int main(int argc, char** argv) {
+    int rank, size;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    
+    int local_rows = M / size;
+    if (local_rows < 1) {
+        if (rank == 0) printf("Too many processes for matrix size %d\n", M);
+        MPI_Finalize();
+        return 1;
+    }
+    
+    // Выделение памяти для локальной части матрицы
+    double* local_A = (double*)malloc(local_rows * M * sizeof(double));
+    if (local_A == NULL) {
+        printf("Process %d: memory allocation failed\n", rank);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    
+    if (rank == 0) {
+        // Мастер-процесс: создаёт полную матрицу
+        double* A = (double*)malloc(M * M * sizeof(double));
+        if (A == NULL) {
+            printf("Master: memory allocation failed\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        
+        srand(time(NULL));
+        for (int i = 0; i < M; i++) {
+            for (int j = 0; j < M; j++) {
+                A[i * M + j] = (rand() % 100) + 1;
+            }
+        }
+        
+        // Распределение строк
+        for (int i = 1; i < size; i++) {
+            MPI_Send(A + i * local_rows * M, local_rows * M, MPI_DOUBLE, i, 0, MPI_COMM_WORLD);
+        }
+        
+        // Копирование своей части
+        for (int i = 0; i < local_rows * M; i++) {
+            local_A[i] = A[i];
+        }
+        
+        free(A);
+    } else {
+        // Получатели
+        MPI_Recv(local_A, local_rows * M, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    }
+    
+    MPI_Barrier(MPI_COMM_WORLD);
+    double start_time = MPI_Wtime();
+    
+    // Транспонирование (каждый процесс транспонирует свои строки)
+    // Результат не собираем на мастер, просто измеряем время
+    
+    // Создаём локальную транспонированную часть
+    double* local_AT = (double*)malloc(M * local_rows * sizeof(double));
+    if (local_AT == NULL) {
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    
+    // Транспонирование: local_AT[j][i] = local_A[i][j]
+    for (int i = 0; i < local_rows; i++) {
+        for (int j = 0; j < M; j++) {
+            local_AT[j * local_rows + i] = local_A[i * M + j];
+        }
+    }
+    
+    double end_time = MPI_Wtime();
+    
+    if (rank == 0) {
+        printf("Matrix size: %d x %d\n", M, M);
+        printf("Processes = %d\n", size);
+        printf("Time = %f seconds (transpose only)\n", end_time - start_time);
+    }
+    
+    free(local_A);
+    free(local_AT);
+    
+    MPI_Finalize();
+    return 0;
+}
