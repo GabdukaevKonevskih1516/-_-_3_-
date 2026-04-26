@@ -1,1 +1,65 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <mpi.h>
+#include <time.h>
 
+#define N 100000000
+
+int main(int argc, char** argv) {
+    int rank, size;
+    double start_time, end_time;
+    
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    
+    int local_n = N / size;
+    double* local_arr = (double*)malloc(local_n * sizeof(double));
+    
+    if (rank == 0) {
+        // Мастер-процесс: создаёт массив и распределяет
+        double* arr = (double*)malloc(N * sizeof(double));
+        srand(time(NULL));
+        for (int i = 0; i < N; i++) {
+            arr[i] = rand() % 100;
+        }
+        
+        start_time = MPI_Wtime();
+        
+        // Отправляем части массива другим процессам
+        for (int i = 1; i < size; i++) {
+            MPI_Send(arr + i * local_n, local_n, MPI_DOUBLE, i, 0, MPI_COMM_WORLD);
+        }
+        
+        // Копируем свою часть
+        for (int i = 0; i < local_n; i++) {
+            local_arr[i] = arr[i];
+        }
+        
+        free(arr);
+    } else {
+        // Процессы-получатели
+        MPI_Recv(local_arr, local_n, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    }
+    
+    // Вычисление локальной суммы
+    double local_sum = 0.0;
+    for (int i = 0; i < local_n; i++) {
+        local_sum += local_arr[i];
+    }
+    
+    // Глобальная сумма через редукцию
+    double global_sum = 0.0;
+    MPI_Reduce(&local_sum, &global_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    
+    if (rank == 0) {
+        end_time = MPI_Wtime();
+        printf("Sum = %.6f\n", global_sum);
+        printf("Processes = %d\n", size);
+        printf("MPI parallel time = %f seconds\n", end_time - start_time);
+    }
+    
+    free(local_arr);
+    MPI_Finalize();
+    return 0;
+}
