@@ -1,1 +1,69 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <mpi.h>
+#include <time.h>
 
+#define N 100000000
+
+int main(int argc, char** argv) {
+    int rank, size;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    
+    int local_n = N / size;
+    double* local_a = (double*)malloc(local_n * sizeof(double));
+    double* local_b = (double*)malloc(local_n * sizeof(double));
+    double* local_add = (double*)malloc(local_n * sizeof(double));
+    double* local_sub = (double*)malloc(local_n * sizeof(double));
+    double* local_mul = (double*)malloc(local_n * sizeof(double));
+    double* local_div = (double*)malloc(local_n * sizeof(double));
+    
+    if (rank == 0) {
+        double* a = (double*)malloc(N * sizeof(double));
+        double* b = (double*)malloc(N * sizeof(double));
+        srand(time(NULL));
+        for (int i = 0; i < N; i++) {
+            a[i] = rand() % 100;
+            b[i] = rand() % 100 + 1;
+        }
+        
+        // Распределение данных
+        for (int i = 1; i < size; i++) {
+            MPI_Send(a + i * local_n, local_n, MPI_DOUBLE, i, 0, MPI_COMM_WORLD);
+            MPI_Send(b + i * local_n, local_n, MPI_DOUBLE, i, 1, MPI_COMM_WORLD);
+        }
+        for (int i = 0; i < local_n; i++) {
+            local_a[i] = a[i];
+            local_b[i] = b[i];
+        }
+        free(a); free(b);
+    } else {
+        MPI_Recv(local_a, local_n, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(local_b, local_n, MPI_DOUBLE, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    }
+    
+    MPI_Barrier(MPI_COMM_WORLD);
+    double start_time = MPI_Wtime();
+    
+    // Параллельное выполнение операций
+    for (int i = 0; i < local_n; i++) {
+        local_add[i] = local_a[i] + local_b[i];
+        local_sub[i] = local_a[i] - local_b[i];
+        local_mul[i] = local_a[i] * local_b[i];
+        local_div[i] = local_a[i] / local_b[i];
+    }
+    
+    double end_time = MPI_Wtime();
+    
+    if (rank == 0) {
+        printf("Processes = %d\n", size);
+        printf("MPI parallel time = %f seconds\n", end_time - start_time);
+        printf("Operations: +, -, *, / completed\n");
+    }
+    
+    free(local_a); free(local_b); free(local_add);
+    free(local_sub); free(local_mul); free(local_div);
+    MPI_Finalize();
+    return 0;
+}
